@@ -118,11 +118,11 @@ more on how this shortcut works, see
 [on making voice commands](./doc/making_voice_commands.md).
 
 
-## Known issues (3/2019)
+## Known issues (9/6/2020)
 
 ### Selection of elements to hint
 
-* Elements inside of iframes are missed
+* Elements inside of cross-origin iframes are missed
   * iframes themselves are now hinted and can be focused or opened in a
     new tab or window
 * Elements added after a page is first loaded can take a while to get
@@ -149,6 +149,9 @@ more on how this shortcut works, see
   * e.g., the generated mouse events do not include coordinates and
     hover does not simulate moving the mouse over all the parent
     elements to the target element
+* Chrome clipboard bugs:
+  * using !!! without following text (e.g., wanted an empty clipboard afterwards) leaves the command in the clipboard because there is no way to empty the clipboard in Chrome extensions
+  * using !!! with thousands of lines can hang the browser for quite a long time
 
 ### Hint display
 
@@ -164,6 +167,9 @@ more on how this shortcut works, see
 * Webpages changing an element after the initial page load can make that
   element's hint disappear
   * usually refreshing hints will make the hint reappear
+* When a webpage removes then re-creates an element, it will get a new
+  hint; when done repeatedly, this causes the element's hint number to
+  keep increasing
 
 ### Other issues
 
@@ -183,6 +189,11 @@ more on how this shortcut works, see
 
 ## News
 
+* 8/2020: New major version 0.21 released
+  * Same-origin iframes are now supported
+  * as of 0.21.4, click-by-voice periodically checks and updates overlay
+    positioning if needed; this includes removing the overlay if the
+	underlying element is no longer connected/present
 * 4/2019: New major version 0.20 released
   * no official changes, but new experimental config feature available
 * 4/2018: New major version 0.19 released.

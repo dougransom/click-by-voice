@@ -3,7 +3,7 @@
 ///
 /// Provides DomWalk
 
-var DomWalk = null;
+let DomWalk = null;
 
 (function() {
 
@@ -11,31 +11,38 @@ var DomWalk = null;
 	if (CBV_inserted_element(element))
     	    return;
 
-	if (css(element, "display") == "none")
+	const styles = window.getComputedStyle(element[0]);
+	if (styles.display == "none") {
 	    return;
+	}
 
 	if (exclusion && element.is(exclusion))
 	    return;
 
 	if (pre_callback)
-	    pre_callback(element);
+	    pre_callback(element, styles);
 
 	element.children().each(function(index) {
 	    each_displaying_helper($(this), pre_callback, post_callback, exclusion);
 	});
 
-	// // <<<>>>
-	// if (element.is("iframe")) {
-	// 	try {
-	// 	    var sub_body = $('body', element.contents());
-	// 	    each_displaying_helper(sub_body, pre_callback, post_callback);
-	// 	} catch (e) {
-	// 	    console.log("iframe access failure: " + e);
-	// 	}
-	// }
+	const element_tag = element[0].nodeName.toLowerCase();
+	if (element_tag == "iframe") {
+	    try {
+		// var sub_body = $('body', element.contents());
+		// each_displaying_helper(sub_body, pre_callback, post_callback);
+
+		// some popover ads are after <body> element
+		$("html", element.contents()).children().filter(":not(head)").each(function (index) {
+		    each_displaying_helper($(this), pre_callback, post_callback, exclusion);
+		});
+	    } catch (e) {
+		console.log("iframe access failure: " + e);
+	    }
+	}
 
 	if (post_callback)
-	    post_callback(element);
+	    post_callback(element, styles);
     }
 
 

@@ -41,8 +41,14 @@ var Hints = null;
     }
 
     function remove_hints() {
+	AddHint.clear_work();
 	$("[CBV_hint_element]").remove();
 	$("[CBV_hint_number]").removeAttr("CBV_hint_number");
+	frame = $("iframe");
+	if (frame.length != 0) {
+	    $("[CBV_hint_element]", frame.contents()).remove();
+	    $("[CBV_hint_number]", frame.contents()).removeAttr("CBV_hint_number");
+	}
 
 	next_CBV_hint_ = -1;
     }
@@ -158,7 +164,7 @@ var Hints = null;
 
     function get_effective_hints(user_hints, url) {
 	var without_comments = config_.replace(/^[ \t]*#.*\n/gm, "");
-	var stanzas = without_comments.split(/\n(\s*\n)+/);
+	var stanzas = without_comments.split(/\n(?:\s*\n)+/);
 
 	var config_hints = "";
 	for (const stanza of stanzas) {
@@ -191,32 +197,35 @@ var Hints = null;
 	if (next_CBV_hint_ < 0)
 	    next_CBV_hint_ = 0;
 
-
+	var start_hint = next_CBV_hint_;
 	var start = performance.now();
+
+	// DomWalk.each_displaying(
+	//     function (element, styles) {},
+	//     function (element, styles) {},
+	//     "");
+	// console.log("  just DomWalk time:   " + (performance.now()-start) + " ms");
+	// start = performance.now();
+
 	// FindHint.each_hintable(function(element) {});
 	// console.log("  just FindHint.each_hintable time:   " + (performance.now()-start) + " ms");
 	// start = performance.now();
-	
 
-	var delayed_work = [];
 	FindHint.each_hintable(function(element) {
-	    if (element.is("[CBV_hint_number]"))
+	    if (element[0].hasAttribute("CBV_hint_number"))
 		return;
-	    element.attr("CBV_hint_number", next_CBV_hint_);
 
-	    var delayed = AddHint.add_hint(element, next_CBV_hint_);
-	    if (delayed)
-		delayed_work.push(delayed);
-
+	    AddHint.add_hint(element, next_CBV_hint_);
 	    next_CBV_hint_ += 1;
 	});
+	const work_start = performance.now();
+	const result = AddHint.do_work();
 
-	delayed_work.map(function (o) { o(); });
-
-
-	// console.log("total hints assigned: " + next_CBV_hint_ 
-	// 		+ "    (" + delayed_work.length + " overlays added)");
-	// console.log("  " + (performance.now()-start) + " ms");
+	if (Hints.option("timing")) {
+	    console.log(`+${next_CBV_hint_-start_hint}` +
+			` -> ${next_CBV_hint_} hints` +
+			` in ${time(start)}: ${time(start, work_start)}; ${result}`);
+	}
     }
 
 

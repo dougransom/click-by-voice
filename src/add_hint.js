@@ -3,14 +3,14 @@
 ///
 /// Provides AddHint
 
-var AddHint = null;
+let AddHint = null;
 
 (function() {
 
 
     // place me <<<>>>
     function CSS_number(element, property_name) {
-	var value = css(element, property_name, "none");
+	const value = css(element, property_name, "none");
 	//console.log(property_name + " -> " + value);
 	if (value == "none")
 	    return 0;
@@ -19,6 +19,67 @@ var AddHint = null;
 	if (value == "100%")
 	    return element.parent().width(); // <<<>>>
 	return 0;
+    }
+
+
+
+    //
+    // Framework for alternating sensing and mutating the DOM to avoid
+    // extra forced layouts
+    //
+
+    let sensing_work	    = [];
+    let mutating_work	    = [];
+    let future_sensing_work = [];
+
+    // use these functions to submit work for this or the next cycle
+    function sensing(thunk) {
+	sensing_work.push(thunk);
+    }
+    function mutating(thunk) {
+	mutating_work.push(thunk);
+    }
+    function future_sensing(thunk) {
+	future_sensing_work.push(thunk);
+    }
+
+    // these are separate helping functions so they can be
+    // distinguished in stack traces
+    function run_sensing_stage(work) {
+	const start = performance.now();
+	work.map(function (thunk) {
+	    thunk();
+	});
+	return time(start);
+    }
+    function run_mutating_stage(work) {
+	const start = performance.now();
+	work.map(function (thunk) {
+	    thunk();
+	});
+	return time(start);
+    }
+
+    // run all work for the current cycle, continuing until no more
+    // work submitted for the current cycle
+    function do_work() {
+	let result = "";
+	while (sensing_work.length + mutating_work.length > 0) {
+	    let work = sensing_work; sensing_work = [];
+	    result += "; " + run_sensing_stage(work);
+	    work = mutating_work; mutating_work = [];
+	    result += "; " + run_mutating_stage(work);
+	}
+	sensing_work = future_sensing_work;
+	future_sensing_work = [];
+	return result.substring(2);
+    }
+
+    // cancel any submitted or scheduled work
+    function clear_work() {
+	sensing_work	    = [];
+	mutating_work	    = [];
+	future_sensing_work = [];
     }
 
 
@@ -61,7 +122,7 @@ var AddHint = null;
     //
 
     function build_base_element() {
-	var element = $("<span></span>");
+	const element = $("<span></span>");
 	// mark our inserted elements so we can distinguish them:
 	element.attr("CBV_hint_element", "true"); 
 	return element;
@@ -75,14 +136,27 @@ var AddHint = null;
 	return element;
     }
 
-    function build_hint(element, hint_number, use_overlay) {
-	var outer = build_base_element();
+    function compute_z_index(element) {
+	// beat hinted element's z-index by at least one;
+	// if we are not in a different stacking context, this should
+	// put us on top of it.
+	let zindex = css(element, "z-index", 0);
+	if (Hints.option("zindex")) {
+	    const min_zindex = Hints.option_value("zindex");
+	    if (zindex < min_zindex || zindex == "auto")
+		zindex = min_zindex;
+	}
+	return zindex;
+    }
+
+    function build_hint(hint_number, use_overlay, zindex) {
+	const outer = build_base_element();
 	outer.attr("CBV_hint_tag", hint_number);
 
 	if (use_overlay) {
 	    outer.attr("CBV_outer_overlay", "true");
 
-	    var inner = build_base_element();
+	    const inner = build_base_element();
 	    outer.append(inner);
 
 	    inner.attr("CBV_inner_overlay", "true");
@@ -93,10 +167,6 @@ var AddHint = null;
 	    set_important(inner, "top",  "0");
 	    set_important(inner, "left", "0");
 
-	    // beat hinted element's z-index by at least one;
-	    // if we are not in a different stacking context, this should
-	    // put us on top of it.
-	    var zindex = css(element, "z-index", 0);
 	    if (zindex > 0)
 		set_important(inner, "z-index", zindex+1);
 
@@ -162,19 +232,19 @@ var AddHint = null;
     //
 
     function compute_displacement(element) {
-	var displacement = parseInt(Hints.option_value('E', '0'));
-	var displacement_right = parseInt(Hints.option_value('displaceX', displacement));
-	var displacement_up    = parseInt(Hints.option_value('displaceY', displacement));
-	var extra_displacement_right = 0;
+	const displacement = parseInt(Hints.option_value('E', '0'));
+	const displacement_right = parseInt(Hints.option_value('displaceX', displacement));
+	const displacement_up    = parseInt(Hints.option_value('displaceY', displacement));
+	let extra_displacement_right = 0;
 	if (Hints.option("?") && element.is("input")) {
-	    var padding = CSS_number(element,"padding-right");
+	    const padding = CSS_number(element,"padding-right");
 	    // too large padding mean something's probably being
 	    // positioned there absolutely so don't put overlay there
 	    if (padding > 10)
 		extra_displacement_right = -padding + 5;
 	}
 
-	var use_displacement = false;
+	let use_displacement = false;
 	if (element.is('a, code, b, i, strong, em, abbr, input[type="checkbox"], input[type="radio"]') && element.children().length == 0) {
 	    use_displacement = true;
 	}
@@ -193,11 +263,89 @@ var AddHint = null;
     }
 
 
-    function add_overlay_hint(element, hint_number) {
-	var hint_tag    = build_hint(element, hint_number, true);
-	var inner	    = hint_tag.children().first();
-	var show_at_end = !Hints.option("s");
+    function overlay_daemon(element, outer, inner, hint_number, show_at_end, displacement) {
+	const daemon = function() {
+	    if (!element[0].isConnected) {
+		mutating(() => {
+		    // console.log(`disconnecting: ${hint_number}:`);
+		    // console.log(element[0]);
+		    outer.remove();
+		    $(`[CBV_hint_number='${hint_number}']`).removeAttr("CBV_hint_number");
+		});
+		return;
+	    }
+	    if (!inner[0].isConnected) {
+		if (Hints.option("keep_hints")) {
+		    // some webpages seem to temporarily disconnect then reconnect hints
+		    future_sensing(daemon);
+		    return;
+		}
+		mutating(() => {
+		    console.log(`lost hint for ${hint_number}; removing...`);
+		    // TODO: automatically reconnect at bottom of body? <<<>>>
+		    // do we need to preserve outer as well then?
+		    outer.remove();
+		    $(`[CBV_hint_number='${hint_number}']`).removeAttr("CBV_hint_number");
+		});
+		return;
+	    }
+	    future_sensing(daemon);
 
+	    try { 
+		// this fails for XML files...
+		let target_offset    = element.offset();
+		const inner_offset   = inner.offset();
+		const element_hidden = (target_offset.top == 0 && target_offset.left == 0);
+		const inner_hidden   = (inner_offset.top == 0 && inner_offset.left == 0);
+		if (show_at_end) {
+		    target_offset.left += element.outerWidth() 
+    		        - inner.outerWidth();
+		}
+		target_offset.top  -= displacement.up;
+		target_offset.left += displacement.right;
+
+		if (element_hidden) {
+		    if (inner_hidden) {
+			return;
+		    }
+		    mutating(() => {
+			// console.log(`hiding hint for hidden element ${hint_number}`);
+			inner.attr("CBV_hidden", "true"); 
+		    });
+		    return;
+		}
+		if (inner_hidden) {
+		    // TODO: what if hidden attribute already removed?
+		    mutating(() => {
+			// console.log(`unhiding hint for unhidden element ${hint_number}`);
+			inner.removeAttr("CBV_hidden"); 
+			inner.offset(target_offset);
+		    });
+		    return;
+		}
+
+		if (Math.abs(inner_offset.left - target_offset.left) > 0.5 ||
+		    Math.abs(inner_offset.top - target_offset.top) > 0.5) {
+		    let inner_top = parseFloat(inner[0].style.top);
+		    let inner_left = parseFloat(inner[0].style.left);
+		    mutating(() => {
+			// console.log(`repositioning overlay for ${hint_number}`);
+			// console.log(`  ${inner_offset.top} x ${inner_offset.left}` + 
+			// 	    ` -> ${target_offset.top} x ${target_offset.left}`);
+
+			//inner.offset(target_offset);
+			inner[0].style.top = `${inner_top + target_offset.top - inner_offset.top}px`;
+			inner[0].style.left = `${inner_left + target_offset.left - inner_offset.left}px`;
+		    });
+		}
+	    } catch (e) {}
+	    // } catch (e) { console.log("exception:'s " + e); }
+	};
+	return daemon;
+    }
+
+    function add_overlay_hint(element, hint_number) {
+	let show_at_end = !Hints.option("s");
 	// hard coding reddit entire story link: <<<>>>
 	if (/\.reddit\.com/.test(window.location.href)) {
 	    if (element.is(".thing"))
@@ -205,17 +353,31 @@ var AddHint = null;
 	}
 
 	// needs to be before we insert the hint tag <<<>>>
-	var displacement = compute_displacement(element);
+	const displacement = compute_displacement(element);
+
+	//
+	// compute where to put overlay
+	//
+	let container = element;
+	let inside = false;
+	let after = true;
+
+	if (Hints.option("exclude")) {
+	    while (container.is(Hints.option_value("exclude"))) {
+		container = container.parent();
+	    }
+	}
 
 	if (Hints.option("f")) {
-	    $("body").after(hint_tag);
-	} else if (element.is("table, tr, td, th, colgroup, tbody, thead, tfoot")) {
+	    container = $("body");
+	    inside = false;
+	    after = true;
+	} else if (container.is("table, tr, td, th, colgroup, tbody, thead, tfoot")) {
 	    // temporary kludge for Gmail: <<<>>>
-	    var current = element;
-	    while (current.is("table, tr, td, th, colgroup, tbody, thead, tfoot"))
-		current = current.parent();
-	    insert_element(current, hint_tag, true, false);
-
+	    while (container.is("table, tr, td, th, colgroup, tbody, thead, tfoot"))
+		container = container.parent();
+	    inside = false;
+	    after = false;
 	} else {
 	    //
 	    // We prefer to put overlays inside the element so they share the
@@ -223,28 +385,32 @@ var AddHint = null;
 	    // the element because after the element has caused the inserted
 	    // span to wrap to the next line box, adding space.
 	    //
-	    if (can_put_span_inside(element))
-		insert_element(element, hint_tag, true, true);
-	    else 
-		insert_element(element, hint_tag, span_before_okay(element), false);
+	    if (can_put_span_inside(container)) {
+		inside = true;
+		after = false;
+	    } else  {
+		inside = false;
+		after = !span_before_okay(container);
+	    }
 	}
 
+	const zindex = compute_z_index(element);
 
-	// move overlay into place at end after all inline hints have been
-	// inserted so their insertion doesn't mess up the overlay's position:
-	return () => {
-	    try { 
-		// this fails for XML files...
-		var target_offset = element.offset();
-		if (show_at_end) {
-		    target_offset.left += element.outerWidth() 
-    		        -   inner.outerWidth();
-		}
-		target_offset.top  -= displacement.up;
-		target_offset.left += displacement.right;
-		inner.offset(target_offset);
-	    } catch (e) {}
-	};
+	mutating(() => {
+	    element.attr("CBV_hint_number", hint_number);
+	    // console.log("added hint " +  hint_number);
+	    // console.log(element[0]);
+
+	    const hint_tag = build_hint(hint_number, true, zindex);
+	    const inner    = hint_tag.children().first();
+	    insert_element(container, hint_tag, !after, inside);
+
+	    // move overlay into place at end after all inline hints have been
+	    // inserted so their insertion doesn't mess up the overlay's position:
+	    const daemon = overlay_daemon(element, hint_tag, inner, hint_number, show_at_end, 
+					  displacement);
+	    sensing(daemon);
+	});
     }
 
 
@@ -254,23 +420,14 @@ var AddHint = null;
     //
 
 
-
-
-
-
-
-
-
-
-
     function visual_contents(element) {
 	if (element.is("iframe"))
 	    return [];
 	
-	var indent = css(element, "text-indent");
+	const indent = css(element, "text-indent");
 	if (indent && /^-999/.test(indent))
 	    return [];
-	var font_size = css(element, "font-size");
+	const font_size = css(element, "font-size");
 	if (font_size && /^0[^0-9]/.test(font_size))
             return [];
 
@@ -298,11 +455,11 @@ var AddHint = null;
     function get_text_overflow_ellipisis_clip(element) {
 	for (;;) {
 	    if (css(element, "text-overflow", "clip") != "clip") {
-		var clip = {right: element[0].getBoundingClientRect().right};
+		let clip = {right: element[0].getBoundingClientRect().right};
 
 		clip.right  -= CSS_number(element,"border-right-width") - 
 		    CSS_number(element,"padding-right");
-		var slop = CSS_number(element,"max-width") - element.width();
+		const slop = CSS_number(element,"max-width") - element.width();
 		if (slop>0)
 		    clip.right += slop;
 
@@ -324,7 +481,7 @@ var AddHint = null;
 
 
     function ellipsis_clipping_possible(element) {
-	var clip = get_text_overflow_ellipisis_clip(element);
+	const clip = get_text_overflow_ellipisis_clip(element);
 	if (!clip)
 	    return false;
 
@@ -342,15 +499,19 @@ var AddHint = null;
 
     // returns false iff unable to safely add hint
     function add_inline_hint_inside(element, hint_number) {
-	var current = element;
+	if (Hints.option("exclude") && element.is(Hints.option_value("exclude"))) {
+	    return false;
+	}
+
+	let current = element;
 	for (;;) {
 	    if (!can_put_span_inside(current))
 		return false;
 
-	    var inside = visual_contents(current);
+	    const inside = visual_contents(current);
 	    if (inside.length == 0)
 		return false;
-	    var last_inside = inside.last();
+	    const last_inside = inside.last();
 
 	    if (last_inside[0].nodeType == Node.ELEMENT_NODE
 		&& last_inside.is("div, span, i, b, strong, em, code, font, abbr")) {
@@ -366,7 +527,7 @@ var AddHint = null;
 	    if (css(current, "display") == "flex")
 		return false;
 
-	    var put_before = false;
+	    let put_before = false;
 	    if (!Hints.option(".") && ellipsis_clipping_possible(current)) {
 		if (!Hints.option(">"))
 		    put_before = true;
@@ -374,9 +535,11 @@ var AddHint = null;
 		    return false;
 	    }
 
-	    //var hint_tag = build_hint(element, hint_number, false);
-	    var hint_tag = build_hint(current, hint_number, false);
-	    insert_element(current, hint_tag, put_before, true);
+	    mutating(() => {
+		element.attr("CBV_hint_number", hint_number);
+		const hint_tag = build_hint(hint_number, false, 0);
+		insert_element(current, hint_tag, put_before, true);
+	    });
 	    return true;
 	}
     }
@@ -384,50 +547,45 @@ var AddHint = null;
 
     // this is often unsafe; prefer add_inline_hint_inside
     function add_inline_hint_outside(element, hint_number) {
-	var hint_tag = build_hint(element, hint_number, false);
-	insert_element(element, hint_tag, false, false);
+	mutating(() => {
+	    element.attr("CBV_hint_number", hint_number);
+	    const hint_tag = build_hint(hint_number, false, 0);
+	    insert_element(element, hint_tag, false, false);
+	});
     }
 
 
 
     function add_hint(element, hint_number) {
-	if (Hints.option("#")) {
-	    if (element.is("a") || element.is("button")) {
-		var hint_tag = build_hint(element, hint_number, false);
-		insert_element(element, hint_tag, false, true);
-		return null;
+	sensing(() => {
+	    if (Hints.option("o")) {
+		add_overlay_hint(element, hint_number);
+		return;
 	    }
-	    add_inline_hint_outside(element, hint_number);
-	    return null;
-	}
 
-
-	if (Hints.option("o"))
-	    return add_overlay_hint(element, hint_number);
-
-	if (Hints.option("i")) {
-	    if (!add_inline_hint_inside(element, hint_number))
-		add_inline_hint_outside(element, hint_number);
-	    return null;
-	}
-
-	if (Hints.option("h")) {
-	    if (!add_inline_hint_inside(element, hint_number)) {
-		// if (element.is("input[type=checkbox], input[type=radio]")) {
-		//     add_inline_hint_outside(element, hint_number);
-		//     return null;
-		// }
-		return add_overlay_hint(element, hint_number);
+	    if (Hints.option("h")) {
+		if (!add_inline_hint_inside(element, hint_number)) {
+		    // if (element.is("input[type=checkbox], input[type=radio]")) {
+		    //     add_inline_hint_outside(element, hint_number);
+		    //     return null;
+		    // }
+		    return add_overlay_hint(element, hint_number);
+		}
+		return;
 	    }
-	    return null;
-	}
 
-	// current fallback is inline
-	if (!add_inline_hint_inside(element, hint_number))
-	    add_inline_hint_outside(element, hint_number);
-	return null;
+	    // current fallback is inline
+	    if (Hints.option("i") || true) {
+		if (!add_inline_hint_inside(element, hint_number))
+		    add_inline_hint_outside(element, hint_number);
+		return;
+	    }
+	});
     }
 
 
-    AddHint = {add_hint: add_hint};
+    AddHint = {add_hint: add_hint,
+	       do_work: do_work,
+	       clear_work: clear_work
+	      };
 })();
